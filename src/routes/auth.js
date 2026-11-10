@@ -5,7 +5,7 @@ import rateLimit from 'express-rate-limit';
 import { query } from '../db.js';
 import { requireAuth, signToken, SUSPENDED_MESSAGE } from '../middleware/auth.js';
 import { notify, sendPasswordResetEmail, sendVerificationEmail } from '../lib/mailer.js';
-import { passwordProblem } from '../lib/passwords.js';
+import { passwordProblem, personalHints } from '../lib/passwords.js';
 import { recomputeRatingSql } from '../lib/tradieQuery.js';
 import { removePhoto } from '../lib/uploads.js';
 import { normaliseAuPhone } from '../australia.js';
@@ -52,7 +52,7 @@ router.post('/register', limiter, async (req, res) => {
   if (req.body.accept_terms !== true) return res.status(400).json({ error: 'Please agree to the Terms of Use and Privacy Policy' });
   if (!name) return res.status(400).json({ error: 'Name is required' });
   if (!EMAIL_RE.test(email)) return res.status(400).json({ error: 'A valid email is required' });
-  const weak = passwordProblem(password);
+  const weak = passwordProblem(password, personalHints(name, email.split('@')[0], req.body.business_name));
   if (weak) return res.status(400).json({ error: weak });
   if (phone) {
     phone = normaliseAuPhone(phone);
@@ -169,7 +169,9 @@ router.post('/reset-password', resetLimiter, async (req, res) => {
   const token = String(req.body.token || '');
   const password = String(req.body.password || '');
   if (!/^[a-f0-9]{64}$/.test(token)) return res.status(400).json({ error: 'This reset link is invalid' });
-  const weak = passwordProblem(password);
+  const who = await query('SELECT name, email FROM users WHERE reset_token_hash = $1 AND reset_token_expires > now()', [sha256(token)]);
+  if (!who.rows[0]) return res.status(400).json({ error: 'This reset link is invalid or has expired. Please ask for a new one.' });
+  const weak = passwordProblem(password, personalHints(who.rows[0].name, who.rows[0].email.split('@')[0]));
   if (weak) return res.status(400).json({ error: weak });
   const hash = await bcrypt.hash(password, 10);
   // Opening the emailed link also proves the email address, so it counts as confirmed.
@@ -192,7 +194,7 @@ router.put('/password', limiter, requireAuth, async (req, res) => {
   if (!(await bcrypt.compare(String(req.body.current_password || ''), user.password_hash))) {
     return res.status(400).json({ error: 'Your current password is not right' });
   }
-  const weak = passwordProblem(req.body.password);
+  const weak = passwordProblem(req.body.password, personalHints(user.name, user.email.split('@')[0]));
   if (weak) return res.status(400).json({ error: weak });
   if (await bcrypt.compare(String(req.body.password), user.password_hash)) {
     return res.status(400).json({ error: 'Please choose a password different from your current one' });
