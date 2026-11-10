@@ -1,4 +1,5 @@
 import nodemailer from 'nodemailer';
+import { waitUntil } from '@vercel/functions';
 
 // Uses SMTP when SMTP_HOST is set; otherwise prints emails to the console (handy for local development).
 const transport = process.env.SMTP_HOST
@@ -32,8 +33,19 @@ export function sendVerificationEmail(user, token) {
   });
 }
 
+/**
+ * Runs a task after the response is sent. On Vercel, waitUntil keeps the function alive until
+ * the task finishes (otherwise the platform can stop it as soon as the response goes out).
+ */
+export function background(promise) {
+  const p = Promise.resolve(promise).catch((err) => console.error('Background task failed:', err.message));
+  waitUntil(p);
+  return p;
+}
+
+/** Sends a notification email without making the user wait for it. */
 export function notify(to, subject, text) {
-  return sendMail({ to, subject, text }).catch((err) => console.error('Email failed:', err.message));
+  return background(sendMail({ to, subject, text }));
 }
 
 function escapeHtml(s) {

@@ -3,7 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import { query } from './db.js';
-import { PUBLIC_DIR } from './lib/uploads.js';
+import { PUBLIC_DIR, useDisk } from './lib/uploads.js';
 import authRoutes from './routes/auth.js';
 import metaRoutes from './routes/meta.js';
 import tradieRoutes from './routes/tradies.js';
@@ -29,7 +29,7 @@ app.use(cors({ origin: origins }));
 app.use(express.json({ limit: '1mb' }));
 
 // Profile photos only. Verification documents live in a private folder and are streamed to admins.
-app.use('/uploads', express.static(PUBLIC_DIR, { maxAge: '7d', index: false }));
+if (useDisk) app.use('/uploads', express.static(PUBLIC_DIR, { maxAge: '7d', index: false }));
 
 app.get('/api/health', async (_req, res) => {
   await query('SELECT 1');
@@ -57,8 +57,14 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: 'Something went wrong' });
 });
 
-const port = process.env.PORT || 4000;
-app.listen(port, () => {
-  console.log(`Nearvo API running on http://localhost:${port}`);
-  if (!abrEnabled()) console.warn('ABR_GUID is not set: ABNs/ACNs are only checksum-checked, not looked up. Add your ABN Lookup GUID to .env.');
-});
+// Vercel imports this file and runs the exported app as a function.
+// Locally (npm run dev / npm start) we start a normal server.
+if (!process.env.VERCEL) {
+  const port = process.env.PORT || 4000;
+  app.listen(port, () => {
+    console.log(`Nearvo API running on http://localhost:${port}`);
+    if (!abrEnabled()) console.warn('ABR_GUID is not set: ABNs/ACNs are only checksum-checked, not looked up. Add your ABN Lookup GUID to .env.');
+  });
+}
+
+export default app;

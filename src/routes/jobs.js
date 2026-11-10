@@ -3,7 +3,7 @@ import { Router } from 'express';
 import pool, { query } from '../db.js';
 import { requireAuth, requireRole, requireVerifiedEmail } from '../middleware/auth.js';
 import { recomputeRatingSql, tradieSelect } from '../lib/tradieQuery.js';
-import { notify } from '../lib/mailer.js';
+import { background, notify } from '../lib/mailer.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -61,8 +61,8 @@ router.post('/jobs', requireRole('customer'), requireVerifiedEmail, async (req, 
   );
   if (!rows[0]) return res.status(400).json({ error: 'Unknown trade or suburb' });
 
-  // Let matching tradies know (fire and forget).
-  query(
+  // Let matching tradies know (in the background).
+  background(query(
     `SELECT u.email, u.name FROM jobs j
      JOIN suburbs js ON js.id = j.suburb_id
      JOIN tradie_services svc ON svc.category_id = j.category_id
@@ -75,7 +75,7 @@ router.post('/jobs', requireRole('customer'), requireVerifiedEmail, async (req, 
     [rows[0].id]
   ).then(({ rows: tradies }) => tradies.forEach((t) =>
     notify(t.email, `New job near you: ${title}`, `Hi ${t.name},\n\nA customer near you needs help: "${title}".\nView and quote: ${appUrl()}/jobs/${rows[0].id}\n\nNearvo`)
-  )).catch(() => {});
+  )));
 
   res.status(201).json({ id: rows[0].id });
 });

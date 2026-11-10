@@ -4,7 +4,7 @@ import { query } from '../db.js';
 import pool from '../db.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 import { abrColumns, lookupBusinessNumber } from '../lib/abr.js';
-import { photoUpload, removeUpload, verifyFileContent } from '../lib/uploads.js';
+import { photoUpload, removePhoto, savePhoto } from '../lib/uploads.js';
 
 const router = Router();
 router.use(requireAuth, requireRole('tradie'));
@@ -115,12 +115,11 @@ router.put('/profile', async (req, res) => {
 
 router.post('/photo', photoUpload.single('photo'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Please choose an image' });
-  if (!verifyFileContent(req.file)) return res.status(400).json({ error: 'That file is not a valid image' });
+  const url = await savePhoto(req.file);
+  if (!url) return res.status(400).json({ error: 'That file is not a valid image' });
   const { rows } = await query('SELECT photo_url FROM tradie_profiles WHERE user_id = $1', [req.user.id]);
-  const old = rows[0]?.photo_url;
-  const url = `/uploads/${req.file.filename}`;
   await query('UPDATE tradie_profiles SET photo_url = $1, updated_at = now() WHERE user_id = $2', [url, req.user.id]);
-  if (old?.startsWith('/uploads/')) removeUpload(`public/${old.slice('/uploads/'.length)}`);
+  await removePhoto(rows[0]?.photo_url);
   res.json({ photo_url: url });
 });
 
