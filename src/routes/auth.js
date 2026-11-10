@@ -8,6 +8,17 @@ import { sendVerificationEmail } from '../lib/mailer.js';
 import { normaliseAuPhone } from '../australia.js';
 import { abrColumns, lookupBusinessNumber } from '../lib/abr.js';
 
+// Same rules as the sign-up form's checklist (nearvo-frontend/src/passwordRules.js).
+function passwordProblem(p) {
+  if (p.length < 8) return 'Password must be at least 8 characters';
+  if (p.length > 200) return 'Password is too long';
+  if (!/[A-Z]/.test(p)) return 'Password needs a capital letter (A–Z)';
+  if (!/[a-z]/.test(p)) return 'Password needs a small letter (a–z)';
+  if (!/[0-9]/.test(p)) return 'Password needs a number (0–9)';
+  if (!/[^A-Za-z0-9\s]/.test(p)) return 'Password needs a symbol such as @ $ ! % * ? &';
+  return null;
+}
+
 const router = Router();
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const limiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many attempts, please try again in a few minutes' } });
@@ -49,7 +60,8 @@ router.post('/register', limiter, async (req, res) => {
   if (req.body.accept_terms !== true) return res.status(400).json({ error: 'Please agree to the Terms of Use and Privacy Policy' });
   if (!name) return res.status(400).json({ error: 'Name is required' });
   if (!EMAIL_RE.test(email)) return res.status(400).json({ error: 'A valid email is required' });
-  if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
+  const weak = passwordProblem(password);
+  if (weak) return res.status(400).json({ error: weak });
   if (phone) {
     phone = normaliseAuPhone(phone);
     if (!phone) return res.status(400).json({ error: 'Please enter an Australian phone number, e.g. 0412 345 678' });

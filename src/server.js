@@ -21,11 +21,19 @@ if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 16) {
 }
 
 const app = express();
-const origins = (process.env.CLIENT_URL || 'http://localhost:5173').split(',').map((s) => s.trim());
+// Allowed website addresses (comma-separated). Trailing "/" and letter case are ignored, so
+// "https://nearvo-frontend.vercel.app/" and "https://nearvo-frontend.vercel.app" both work.
+const clean = (u) => String(u || '').trim().replace(/\/+$/, '').toLowerCase();
+const origins = (process.env.CLIENT_URL || 'http://localhost:5173').split(',').map(clean).filter(Boolean);
+const corsOrigin = (origin, cb) => {
+  if (!origin || origins.includes(clean(origin))) return cb(null, true);
+  console.warn(`CORS: blocked ${origin}. Add it to CLIENT_URL (currently: ${origins.join(', ')})`);
+  return cb(null, false);
+};
 
 app.set('trust proxy', 1);
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
-app.use(cors({ origin: origins }));
+app.use(cors({ origin: corsOrigin }));
 app.use(express.json({ limit: '1mb' }));
 
 // Profile photos only. Verification documents live in a private folder and are streamed to admins.
