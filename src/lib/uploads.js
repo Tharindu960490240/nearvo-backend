@@ -10,7 +10,11 @@ import path from 'node:path';
 import multer from 'multer';
 import { del, put } from '@vercel/blob';
 
-export const useBlob = Boolean(process.env.BLOB_READ_WRITE_TOKEN);
+// Vercel names the variable BLOB_READ_WRITE_TOKEN by default, or <PREFIX>_READ_WRITE_TOKEN when a
+// custom prefix was chosen while connecting the store, so accept any variable holding a Blob token.
+const blobToken = process.env.BLOB_READ_WRITE_TOKEN
+  || Object.entries(process.env).find(([k, v]) => k.endsWith('READ_WRITE_TOKEN') && String(v).startsWith('vercel_blob_rw_'))?.[1];
+export const useBlob = Boolean(blobToken);
 export const UPLOAD_DIR = path.resolve(process.env.UPLOAD_DIR || path.join(process.cwd(), 'uploads'));
 export const PUBLIC_DIR = path.join(UPLOAD_DIR, 'public');
 
@@ -19,7 +23,9 @@ export const useDisk = !useBlob && !process.env.VERCEL && (() => {
   try { fs.mkdirSync(PUBLIC_DIR, { recursive: true }); return true; } catch { return false; }
 })();
 if (!useBlob && !useDisk) {
-  console.warn('Photo uploads are off: connect Vercel Blob (BLOB_READ_WRITE_TOKEN) to turn them on.');
+  const blobVars = Object.keys(process.env).filter((k) => /BLOB/i.test(k));
+  console.warn('Photo uploads are off: connect Vercel Blob (BLOB_READ_WRITE_TOKEN) to turn them on.'
+    + (blobVars.length ? ` Found these Blob-related settings, but none holds a read-write token: ${blobVars.join(', ')}` : ' No Blob settings found in this deployment.'));
 }
 
 const EXT = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp' };
@@ -59,7 +65,7 @@ export async function savePhoto(file) {
     return null;
   }
   if (useBlob) {
-    const blob = await put(`photos/${newName(file.mimetype)}`, file.buffer, { access: 'public', contentType: file.mimetype });
+    const blob = await put(`photos/${newName(file.mimetype)}`, file.buffer, { access: 'public', contentType: file.mimetype, token: blobToken });
     return blob.url;
   }
   return `/uploads/${file.filename}`;
@@ -70,7 +76,7 @@ export async function removePhoto(url) {
   if (!url) return;
   try {
     if (/^https?:\/\//.test(url)) {
-      if (useBlob) await del(url);
+      if (useBlob) await del(url, { token: blobToken });
     } else if (url.startsWith('/uploads/')) {
       const full = path.resolve(PUBLIC_DIR, url.slice('/uploads/'.length));
       if (full.startsWith(PUBLIC_DIR + path.sep)) fs.rmSync(full, { force: true });
