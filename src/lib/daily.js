@@ -6,6 +6,7 @@ import { abrEnabled, lookupBusinessNumber } from './abr.js';
 import { getAlerts } from './alerts.js';
 import { logAction } from './audit.js';
 import { appUrl, escapeHtml, sendMail } from './mailer.js';
+import { emailButton, emailColors, renderEmail } from './emailTemplate.js';
 
 const RECHECK_DAYS = 30;     // every tradie is re-checked at least this often
 const BATCH = 40;            // per run, so one run stays well inside the function time limit
@@ -90,13 +91,22 @@ export async function sendDailySummary(abn = null) {
   const text = `Last 24 hours on Nearvo\n\n${lines.map(([k, v]) => `${k}: ${v}`).join('\n')}\n\n`
     + (alerts.length ? `Needs a look:\n${alerts.map((a) => `- ${a.title}`).join('\n')}\n\n` : 'Nothing needs a look.\n\n')
     + (abnLine ? `${abnLine}\n\n` : '') + `Admin: ${appUrl()}/dashboard`;
-  const html = `<div style="font-family:Arial,sans-serif;color:#0d2b45">
-    <h2 style="margin:0 0 4px">Nearvo: last 24 hours</h2>
-    <p style="color:#557086;margin:0 0 14px">${needs ? 'A few things need a look.' : 'Nothing needs you today.'}</p>
-    <table cellpadding="6" style="border-collapse:collapse">${lines.map(([k, v]) => `<tr><td style="color:#557086">${k}</td><td style="font-weight:bold">${v}</td></tr>`).join('')}</table>
-    ${alerts.length ? `<h3 style="margin:18px 0 6px">Needs a look</h3><ul>${alerts.map((a) => `<li>${escapeHtml(a.title)}</li>`).join('')}</ul>` : ''}
-    ${abnLine ? `<p style="color:#557086">${escapeHtml(abnLine)}</p>` : ''}
-    <p><a href="${appUrl()}/dashboard" style="background:#0288D1;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none">Open admin</a></p></div>`;
+  const C = emailColors;
+  const cell = ([k, v], i) => `<td width="25%" style="padding:12px 8px;text-align:center;border:1px solid ${C.line};background:${C.soft}">
+      <div style="font-size:22px;font-weight:800;color:${k === 'Reports waiting' && v ? '#b26a00' : C.ink}">${v}</div>
+      <div style="font-size:12px;color:${C.muted}">${k}</div></td>`;
+  const rows = [lines.slice(0, 4), lines.slice(4, 8)].map((r) => `<tr>${r.map(cell).join('')}</tr>`).join('');
+  const html = renderEmail({
+    title: needs ? 'A few things need a look' : 'All quiet on Nearvo',
+    preheader: subject,
+    bodyHtml: `<p style="margin:0 0 16px;color:${C.muted}">Here's what happened in the last 24 hours.</p>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin:0 0 18px">${rows}</table>
+      ${alerts.length
+        ? `<h2 style="margin:6px 0 8px;font-size:17px">Needs a look</h2><ul style="margin:0 0 12px;padding-left:20px">${alerts.map((a) => `<li style="margin:0 0 6px">${escapeHtml(a.title)}<br><span style="font-size:13px;color:${C.muted}">${escapeHtml(a.text)}</span></li>`).join('')}</ul>`
+        : `<p style="margin:0 0 12px">✅ No unusual activity: spam, scam and overdue-report checks all look fine.${c.open_reports ? ` You have <b>${c.open_reports} report${c.open_reports === 1 ? '' : 's'}</b> to review in the inbox.` : ''}</p>`}
+      ${abnLine ? `<p style="margin:0 0 12px;font-size:14px;color:${C.muted}">${escapeHtml(abnLine)}</p>` : ''}
+      ${emailButton('Open the admin dashboard', `${appUrl()}/dashboard`)}`,
+  });
   await sendMail({ to, subject, text, html });
   return { sent: true, subject };
 }
