@@ -28,7 +28,7 @@ function parseJsonp(text) {
  * Looks up an ABN (11 digits) or ACN (9 digits) and returns normalised details.
  * Throws AbrError for invalid / not found / inactive numbers or when the service is unavailable.
  */
-export async function lookupBusinessNumber(raw) {
+export async function lookupBusinessNumber(raw, { fresh = false } = {}) {
   const number = String(raw || '').replace(/[\s-]/g, '');
   const kind = number.length === 11 ? 'abn' : number.length === 9 ? 'acn' : null;
   if (!kind || !/^\d+$/.test(number)) throw new AbrError('Enter an 11-digit ABN or a 9-digit ACN', 'ABN_FORMAT');
@@ -40,7 +40,7 @@ export async function lookupBusinessNumber(raw) {
     return { abn: kind === 'abn' ? number : null, acn: kind === 'acn' ? number : null, status: 'Unchecked', source: 'checksum', entity_name: null, business_names: [] };
   }
 
-  const hit = cache.get(number);
+  const hit = fresh ? null : cache.get(number);   // re-checks always ask the ABR again
   if (hit && hit.expires > Date.now()) return hit.value;
 
   const url = `${BASE}/${kind === 'abn' ? 'AbnDetails' : 'AcnDetails'}.aspx?${kind}=${number}&callback=callback&guid=${encodeURIComponent(process.env.ABR_GUID)}`;

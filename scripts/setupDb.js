@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import bcrypt from 'bcryptjs';
 import pool from '../src/db.js';
 import { loadSuburbs } from './loadSuburbs.js';
+import { passwordProblem } from '../src/lib/passwords.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEMO_PASSWORD = 'Demo@1234';
@@ -82,6 +83,7 @@ async function main() {
   const client = await pool.connect();
   try {
     await client.query(readFileSync(path.join(__dirname, '../db/schema.sql'), 'utf8'));
+    await client.query(readFileSync(path.join(__dirname, '../db/migrate.sql'), 'utf8'));
     console.log('✓ Tables created');
 
     const suburbCount = await loadSuburbs(client);
@@ -94,6 +96,8 @@ async function main() {
       const email = String(process.env.ADMIN_EMAIL || '').toLowerCase();
       const password = process.env.ADMIN_PASSWORD || '';
       if (!email || password.length < 10) throw new Error('For --no-demo, set ADMIN_EMAIL and ADMIN_PASSWORD (10+ characters) in .env');
+      const weak = passwordProblem(password);
+      if (weak) throw new Error(`ADMIN_PASSWORD: ${weak}`);
       await client.query(
         `INSERT INTO users (name, email, password_hash, role, email_verified_at, terms_accepted_at) VALUES ('Admin', $1, $2, 'admin', now(), now())`,
         [email, await bcrypt.hash(password, 10)]

@@ -3,7 +3,7 @@ import { Router } from 'express';
 import pool, { query } from '../db.js';
 import { requireAuth, requireRole, requireVerifiedEmail } from '../middleware/auth.js';
 import { recomputeRatingSql, tradieSelect } from '../lib/tradieQuery.js';
-import { background, notify } from '../lib/mailer.js';
+import { appUrl, background, notify } from '../lib/mailer.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -11,7 +11,6 @@ router.use(requireAuth);
 export const BUDGETS = ['Under $200', '$200 – $500', '$500 – $1,000', '$1,000 – $5,000', 'Over $5,000', 'Not sure'];
 export const TIMINGS = ['As soon as possible', 'Within a week', 'Within a month', "I'm flexible"];
 const AMOUNT_TYPES = ['fixed', 'per hour', 'estimate'];
-const appUrl = () => (process.env.CLIENT_URL || 'http://localhost:5173').split(',')[0];
 
 const jobSelect = `
   SELECT j.*, c.name AS category_name, c.slug AS category_slug, c.icon AS category_icon,
@@ -55,7 +54,7 @@ router.post('/jobs', requireRole('customer'), requireVerifiedEmail, async (req, 
 
   const { rows } = await query(
     `INSERT INTO jobs (customer_id, category_id, suburb_id, title, description, budget, timing)
-     SELECT $1, c.id, s.id, $4, $5, $6, $7 FROM categories c, suburbs s WHERE c.id = $2 AND s.id = $3
+     SELECT $1, c.id, s.id, $4, $5, $6, $7 FROM categories c, suburbs s WHERE c.id = $2 AND c.hidden_at IS NULL AND s.id = $3
      RETURNING id`,
     [req.user.id, categoryId, suburbId, title, description, budget, timing]
   );

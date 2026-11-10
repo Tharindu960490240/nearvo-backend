@@ -7,7 +7,9 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "db:setup": "node scripts/setupDb.js"
+    "db:setup": "node scripts/setupDb.js",
+    "db:migrate": "node scripts/migrate.js",
+    "admin:password": "node scripts/adminPassword.js"
   },
   "dependencies": {
     "@vercel/blob": "^2.9.0",

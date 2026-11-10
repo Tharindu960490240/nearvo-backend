@@ -1,7 +1,8 @@
 -- Nearvo: tradie marketplace schema (PostgreSQL)
--- Run via `npm run db:setup`, which DROPS and recreates everything below.
+-- Run via `npm run db:setup`, which DROPS and recreates everything below (then applies db/migrate.sql).
+-- To upgrade a live database without losing data, use `npm run db:migrate` instead.
 
-DROP TABLE IF EXISTS reports, reviews, quotes, jobs, verification_documents, tradie_services, tradie_profiles,
+DROP TABLE IF EXISTS admin_actions, settings, reports, reviews, quotes, jobs, verification_documents, tradie_services, tradie_profiles,
   categories, suburbs, users CASCADE;
 -- Tables from earlier Nearvo versions
 DROP TABLE IF EXISTS businesses, localities CASCADE;

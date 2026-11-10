@@ -10,7 +10,8 @@ router.get('/categories', async (_req, res) => {
     SELECT c.*, COUNT(tp.user_id)::int AS tradie_count
     FROM categories c
     LEFT JOIN tradie_services ts ON ts.category_id = c.id
-    LEFT JOIN tradie_profiles tp ON tp.user_id = ts.tradie_id AND tp.suburb_id IS NOT NULL
+    LEFT JOIN tradie_profiles tp ON tp.user_id = ts.tradie_id AND tp.suburb_id IS NOT NULL AND tp.suspended_at IS NULL
+    WHERE c.hidden_at IS NULL
     GROUP BY c.id ORDER BY c.name`);
   res.json(rows);
 });
@@ -56,6 +57,15 @@ router.get('/states', async (_req, res) => {
     SELECT s.state, COUNT(*)::int AS n FROM tradie_profiles tp JOIN suburbs s ON s.id = tp.suburb_id GROUP BY s.state`);
   const counts = Object.fromEntries(rows.map((r) => [r.state, r.n]));
   res.json(Object.entries(STATES).map(([code, name]) => ({ code, name, tradie_count: counts[code] || 0 })));
+});
+
+// GET /api/announcement - the site-wide banner set by an admin (null when there isn't one)
+router.get('/announcement', async (_req, res) => {
+  const { rows } = await query(`SELECT value, updated_at FROM settings WHERE key = 'announcement'`);
+  const a = rows[0]?.value;
+  const live = a?.active && a.text && (!a.ends_at || new Date(a.ends_at) > new Date());
+  res.set('Cache-Control', 'no-cache');
+  res.json(live ? { text: a.text, tone: a.tone || 'info', link_url: a.link_url || null, link_label: a.link_label || null, id: rows[0].updated_at } : null);
 });
 
 export default router;

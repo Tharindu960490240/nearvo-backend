@@ -3,21 +3,13 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import rateLimit from 'express-rate-limit';
 import { query } from '../db.js';
-import { requireAuth, signToken } from '../middleware/auth.js';
-import { sendVerificationEmail } from '../lib/mailer.js';
+import { requireAuth, signToken, SUSPENDED_MESSAGE } from '../middleware/auth.js';
+import { notify, sendPasswordResetEmail, sendVerificationEmail } from '../lib/mailer.js';
+import { passwordProblem } from '../lib/passwords.js';
+import { recomputeRatingSql } from '../lib/tradieQuery.js';
+import { removePhoto } from '../lib/uploads.js';
 import { normaliseAuPhone } from '../australia.js';
 import { abrColumns, lookupBusinessNumber } from '../lib/abr.js';
-
-// Same rules as the sign-up form's checklist (nearvo-frontend/src/passwordRules.js).
-function passwordProblem(p) {
-  if (p.length < 8) return 'Password must be at least 8 characters';
-  if (p.length > 200) return 'Password is too long';
-  if (!/[A-Z]/.test(p)) return 'Password needs a capital letter (A–Z)';
-  if (!/[a-z]/.test(p)) return 'Password needs a small letter (a–z)';
-  if (!/[0-9]/.test(p)) return 'Password needs a number (0–9)';
-  if (!/[^A-Za-z0-9\s]/.test(p)) return 'Password needs a symbol such as @ $ ! % * ? &';
-  return null;
-}
 
 const router = Router();
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -41,7 +33,7 @@ export async function getMe(userId) {
   return u;
 }
 
-async function issueEmailToken(user) {
+export async function issueEmailToken(user) {
   const token = crypto.randomBytes(32).toString('hex');
   await query(
     `UPDATE users SET email_token_hash = $1, email_token_expires = now() + interval '24 hours' WHERE id = $2`,
@@ -111,6 +103,8 @@ router.post('/login', limiter, async (req, res) => {
   if (!user || !(await bcrypt.compare(String(req.body.password || ''), user.password_hash))) {
     return res.status(401).json({ error: 'Invalid email or password' });
   }
+  if (user.suspended_at) return res.status(403).json({ error: SUSPENDED_MESSAGE, code: 'ACCOUNT_SUSPENDED' });
+  await query('UPDATE users SET last_login_at = now() WHERE id = $1', [user.id]);
   res.json({ token: signToken(user), user: await getMe(user.id) });
 });
 
@@ -151,6 +145,91 @@ router.put('/me', requireAuth, async (req, res) => {
   }
   await query('UPDATE users SET name = $1, phone = $2 WHERE id = $3', [name, phone, req.user.id]);
   res.json({ user: await getMe(req.user.id) });
+});
+
+// ---------- Forgot / reset password ----------
+const resetLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 8, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many requests, please try again later' } });
+
+// Always answers the same way, so nobody can use it to find out which emails have accounts.
+router.post('/forgot-password', resetLimiter, async (req, res) => {
+  const email = String(req.body.email || '').trim().toLowerCase();
+  if (EMAIL_RE.test(email)) {
+    const { rows } = await query('SELECT id, name, email, suspended_at FROM users WHERE email = $1', [email]);
+    const user = rows[0];
+    if (user && !user.suspended_at) {
+      const token = crypto.randomBytes(32).toString('hex');
+      await query(`UPDATE users SET reset_token_hash = $1, reset_token_expires = now() + interval '1 hour' WHERE id = $2`, [sha256(token), user.id]);
+      await sendPasswordResetEmail(user, token).catch((err) => console.error('Reset email failed:', err.message));
+    }
+  }
+  res.json({ ok: true });
+});
+
+router.post('/reset-password', resetLimiter, async (req, res) => {
+  const token = String(req.body.token || '');
+  const password = String(req.body.password || '');
+  if (!/^[a-f0-9]{64}$/.test(token)) return res.status(400).json({ error: 'This reset link is invalid' });
+  const weak = passwordProblem(password);
+  if (weak) return res.status(400).json({ error: weak });
+  const hash = await bcrypt.hash(password, 10);
+  // Opening the emailed link also proves the email address, so it counts as confirmed.
+  const { rows } = await query(
+    `UPDATE users SET password_hash = $1, password_changed_at = now(), reset_token_hash = NULL, reset_token_expires = NULL,
+            email_verified_at = COALESCE(email_verified_at, now())
+     WHERE reset_token_hash = $2 AND reset_token_expires > now() AND suspended_at IS NULL
+     RETURNING id, name, email`,
+    [hash, sha256(token)]
+  );
+  if (!rows[0]) return res.status(400).json({ error: 'This reset link is invalid or has expired. Please ask for a new one.' });
+  notify(rows[0].email, 'Your Nearvo password was changed', `Hi ${rows[0].name},\n\nYour Nearvo password was just changed. If this wasn't you, reset it again straight away and contact us.\n\nNearvo`);
+  res.json({ ok: true });
+});
+
+// ---------- Change password (logged in) ----------
+router.put('/password', limiter, requireAuth, async (req, res) => {
+  const { rows } = await query('SELECT id, name, email, role, password_hash FROM users WHERE id = $1', [req.user.id]);
+  const user = rows[0];
+  if (!(await bcrypt.compare(String(req.body.current_password || ''), user.password_hash))) {
+    return res.status(400).json({ error: 'Your current password is not right' });
+  }
+  const weak = passwordProblem(req.body.password);
+  if (weak) return res.status(400).json({ error: weak });
+  if (await bcrypt.compare(String(req.body.password), user.password_hash)) {
+    return res.status(400).json({ error: 'Please choose a password different from your current one' });
+  }
+  // Log-ins from before this moment stop working; the new one issued below stays valid.
+  await query(`UPDATE users SET password_hash = $1, password_changed_at = now() WHERE id = $2`,
+    [await bcrypt.hash(String(req.body.password), 10), user.id]);
+  notify(user.email, 'Your Nearvo password was changed', `Hi ${user.name},\n\nYour Nearvo password was just changed. If this wasn't you, reset it straight away and contact us.\n\nNearvo`);
+  res.json({ token: signToken(user) });
+});
+
+// ---------- Delete my account ----------
+export async function deleteAccount(userId) {
+  const { rows } = await query(
+    `SELECT u.id, u.name, u.email, u.role, tp.photo_url FROM users u LEFT JOIN tradie_profiles tp ON tp.user_id = u.id WHERE u.id = $1`, [userId]);
+  const user = rows[0];
+  if (!user) return null;
+  // Tradies whose rating includes this person's reviews need their rating recalculated afterwards.
+  const affected = await query('SELECT DISTINCT tradie_id FROM reviews WHERE customer_id = $1', [userId]);
+  await query('DELETE FROM users WHERE id = $1', [userId]);
+  for (const r of affected.rows) await query(recomputeRatingSql, [r.tradie_id]);
+  if (user.photo_url) await removePhoto(user.photo_url);
+  return user;
+}
+
+router.delete('/me', limiter, requireAuth, async (req, res) => {
+  const { rows } = await query('SELECT password_hash, role FROM users WHERE id = $1', [req.user.id]);
+  if (!(await bcrypt.compare(String(req.body.password || ''), rows[0].password_hash))) {
+    return res.status(400).json({ error: 'Your password is not right' });
+  }
+  if (rows[0].role === 'admin') {
+    const admins = await query(`SELECT COUNT(*)::int AS n FROM users WHERE role = 'admin'`);
+    if (admins.rows[0].n <= 1) return res.status(400).json({ error: "You're the only admin, so this account can't be deleted" });
+  }
+  const user = await deleteAccount(req.user.id);
+  notify(user.email, 'Your Nearvo account was deleted', `Hi ${user.name},\n\nYour Nearvo account and personal details have been deleted, as you asked. Thanks for using Nearvo.\n\nNearvo`);
+  res.json({ ok: true });
 });
 
 export default router;
