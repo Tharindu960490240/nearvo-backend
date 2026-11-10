@@ -12,6 +12,10 @@ import { normaliseAuPhone } from '../australia.js';
 import { abrColumns, lookupBusinessNumber } from '../lib/abr.js';
 
 const router = Router();
+
+// Every form that sets a password also asks for it twice; the API checks they match too.
+const MISMATCH = "The two passwords don't match. Please re-type it.";
+const confirmed = (password, confirm) => typeof confirm === 'string' && confirm === password;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const limiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many attempts, please try again in a few minutes' } });
 
@@ -52,6 +56,7 @@ router.post('/register', limiter, async (req, res) => {
   if (req.body.accept_terms !== true) return res.status(400).json({ error: 'Please agree to the Terms of Use and Privacy Policy' });
   if (!name) return res.status(400).json({ error: 'Name is required' });
   if (!EMAIL_RE.test(email)) return res.status(400).json({ error: 'A valid email is required' });
+  if (!confirmed(password, req.body.password_confirm)) return res.status(400).json({ error: MISMATCH, code: 'PASSWORD_MISMATCH' });
   const weak = passwordProblem(password, personalHints(name, email.split('@')[0], req.body.business_name));
   if (weak) return res.status(400).json({ error: weak });
   if (phone) {
@@ -169,6 +174,7 @@ router.post('/reset-password', resetLimiter, async (req, res) => {
   const token = String(req.body.token || '');
   const password = String(req.body.password || '');
   if (!/^[a-f0-9]{64}$/.test(token)) return res.status(400).json({ error: 'This reset link is invalid' });
+  if (!confirmed(password, req.body.password_confirm)) return res.status(400).json({ error: MISMATCH, code: 'PASSWORD_MISMATCH' });
   const who = await query('SELECT name, email FROM users WHERE reset_token_hash = $1 AND reset_token_expires > now()', [sha256(token)]);
   if (!who.rows[0]) return res.status(400).json({ error: 'This reset link is invalid or has expired. Please ask for a new one.' });
   const weak = passwordProblem(password, personalHints(who.rows[0].name, who.rows[0].email.split('@')[0]));
@@ -194,6 +200,7 @@ router.put('/password', limiter, requireAuth, async (req, res) => {
   if (!(await bcrypt.compare(String(req.body.current_password || ''), user.password_hash))) {
     return res.status(400).json({ error: 'Your current password is not right' });
   }
+  if (!confirmed(String(req.body.password || ''), req.body.password_confirm)) return res.status(400).json({ error: MISMATCH, code: 'PASSWORD_MISMATCH' });
   const weak = passwordProblem(req.body.password, personalHints(user.name, user.email.split('@')[0]));
   if (weak) return res.status(400).json({ error: weak });
   if (await bcrypt.compare(String(req.body.password), user.password_hash)) {
